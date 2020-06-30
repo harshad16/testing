@@ -1,0 +1,146 @@
+---
+apiVersion: tekton.dev/v1alpha1
+kind: Pipeline
+metadata:
+  name: notebooks-ci-pipeline
+spec:
+  params:
+  - description: docker target arg
+    name: docker_target
+    type: string
+    default: ""
+  - description: The build context used by Kaniko
+    name: path_to_context
+    type: string
+    default: ""
+  - description: The path to the dockerfile to build
+    name: path_to_docker_file
+    type: string
+    default: ""
+  - description: Directory of the application's kustomize manifest
+    name: path_to_manifests_dir
+    type: string
+    default: ""
+  - description: The path of the image in the kustomization file to change
+    name: src_image_url
+    type: string
+    default: ""
+  - description: The container image to use for running the steps
+    name: container_image
+    type: string
+    default: ""
+  resources:
+  # Pipeline has 3 git resources
+  # app-repo - Repository containing the source code for the application repository
+  # manifests - Repostory containing the manifests to update
+  # ci-tools - Repository containing tools used in the CI/CD pipeline
+  - name: app-repo
+    type: git
+  - name: manifests
+    type: git
+  - name: ci-tools
+    type: git
+
+  # Image resource defines the docker image to build
+  - name: image
+    type: image
+  tasks:
+  - name: build-push
+    params:
+    - name: docker_target
+      value: "$(params.docker_target)"
+    - name: path_to_context
+      value: "$(params.path_to_context)"
+    - name: path_to_docker_file
+      value: "$(params.path_to_docker_file)"
+    resources:
+      inputs:
+      - name: app-repo
+        resource: app-repo
+      - name: image
+        resource: image
+    taskRef:
+      name: build-push
+      kind: namespaced
+  - name: update-manifests
+    runAfter:
+    - build-push
+    params:
+    - name: src_image_url
+      value: "$(params.src_image_url)"
+    - name: path_to_manifests_dir
+      value: "$(params.path_to_manifests_dir)"
+    - name: container_image
+      value: "$(params.container_image)"
+    resources:
+      inputs:
+      - name: manifests
+        resource: manifests
+      - name: app-repo
+        resource: app-repo
+      - name: ci-tools
+        resource: ci-tools
+      - name: image
+        resource: image
+    taskRef:
+      name: update-manifests
+      kind: namespaced
+
+---
+# This is a template used for generating PipelineRuns for
+# individual applications at specific commits.
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineRun
+metadata:
+  # Generate a unique name for each run
+  generateName: ci-profile-controller-
+  # name: ci-profile-controller
+spec:
+  pipelineRef:
+    name: notebooks-ci-pipeline
+  params:
+  - name: "path_to_context"
+    value: "components/tensorflow-notebook-image/"
+  - name: "path_to_docker_file"
+    value: "components/tensorflow-notebook-image/Dockerfile"
+  - name: "path_to_manifests_dir"
+    value: "jupyter/jupyter-web-app/base"
+  - name: "src_image_url"
+    value: "gcr.io/kubeflow-images-public/tensorflow-notebook-image"
+  - name: "container_image"
+    value: "gcr.io/kubeflow-releasing/update_kf_apps:060b1ab@sha256:677d38b9931547e434fb1951ec2b378672747a4a0af28726d8ddd4160d6d175a"
+  resources:
+  # The git resources that will be used
+  - name: app-repo
+    resourceSpec:
+      type: git
+      params:
+        - name: revision
+          value: "1795828"
+        - name: url
+          value: git@github.com:kubeflow/kubeflow.git
+  - name: manifests
+    resourceSpec:
+      type: git
+      params:
+        - name: revision
+          value: master
+        - name: url
+          value: git@github.com:kubeflow/manifests.git
+  - name: ci-tools
+    resourceSpec:
+      type: git
+      params:
+        - name: revision
+          value: master
+        - name: url
+          value: git@github.com:kubeflow/testing.git
+  # The image we want to build
+  - name:  image
+    resourceSpec:
+      type: image
+      params:
+      - name: url
+        value: gcr.io/kubeflow-images-public/profile-controller:vmaster-g1795828
+        # value: image-registry.openshift-image-registry.svc:5000/kubeflow/app:latest
+  serviceAccountName: ci-pipeline-run-service-account
